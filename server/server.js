@@ -138,20 +138,43 @@ app.use("/api", apiLimiter);
 /* LOGIN COM DISCORD - OAuth2 real                                        */
 /* ---------------------------------------------------------------------- */
 
+// O "state" do OAuth2 antes ficava guardado num cookie de curta duração e era
+// conferido na volta (passo 2) pra impedir CSRF no login. Isso depende do
+// cookie sobreviver ao redirecionamento duplo (seu site -> discord.com ->
+// seu site de novo), o que alguns navegadores/extensões bloqueiam. Pra não
+// depender disso, o state agora se autentica sozinho: carrega um "nonce" +
+// timestamp assinados com HMAC usando o JWT_SECRET do servidor. Na volta,
+// só é aceito se a assinatura bater e não tiver passado de 5 minutos — sem
+// precisar de cookie nenhum no meio do caminho.
+function createOAuthState() {
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const timestamp = Date.now().toString();
+  const payload = `${nonce}.${timestamp}`;
+  const sig = crypto.createHmac("sha256", JWT_SECRET).update(payload).digest("hex");
+  return Buffer.from(`${payload}.${sig}`).toString("base64url");
+}
+
+function verifyOAuthState(state) {
+  try {
+    const decoded = Buffer.from(String(state), "base64url").toString("utf8");
+    const [nonce, timestamp, sig] = decoded.split(".");
+    if (!nonce || !timestamp || !sig) return false;
+    const expectedSig = crypto.createHmac("sha256", JWT_SECRET).update(`${nonce}.${timestamp}`).digest("hex");
+    const sigOk = sig.length === expectedSig.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig));
+    if (!sigOk) return false;
+    if (Date.now() - Number(timestamp) > 5 * 60 * 1000) return false; // expira em 5 min
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Passo 1: manda o usuário pro Discord autorizar o app.
-// Um "state" aleatório é guardado num cookie de curta duração e conferido
-// na volta (passo 2) — isso impede ataques de CSRF no fluxo de login.
 app.get("/api/auth/discord/login", (req, res) => {
   if (!DISCORD_CLIENT_ID) {
     return res.status(500).send("O servidor ainda não tem DISCORD_CLIENT_ID configurado (veja server/.env.example).");
   }
-  const state = crypto.randomBytes(16).toString("hex");
-  res.cookie("zuk_oauth_state", state, {
-    httpOnly: true,
-    secure: IS_PROD,
-    sameSite: "lax",
-    maxAge: 5 * 60 * 1000, // só precisa durar o tempo do login
-  });
+  const state = createOAuthState();
 
   const params = new URLSearchParams({
     client_id: DISCORD_CLIENT_ID,
@@ -170,12 +193,10 @@ app.get("/api/auth/discord/login", (req, res) => {
 app.get("/api/auth/discord/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
-    const expectedState = req.cookies?.zuk_oauth_state;
 
-    if (!code || !state || !expectedState || state !== expectedState) {
+    if (!code || !state || !verifyOAuthState(state)) {
       return res.status(400).send("Login inválido ou expirado. Volte e tente entrar de novo.");
     }
-    res.clearCookie("zuk_oauth_state");
 
     // Troca o code pelo token de acesso
     const tokenResp = await fetch("https://discord.com/api/oauth2/token", {
