@@ -18,8 +18,31 @@ const friends = require("./friends");
 const zpay = require("./zpay");
 
 const PORT = process.env.PORT || 3006;
+
+// Na Vercel, cada requisição pode cair numa instância serverless diferente
+// (ou numa instância "fria" recém-criada). Se JWT_SECRET não vier fixo do
+// ambiente, o fallback abaixo geraria uma chave nova a cada vez — aí o
+// "state" do OAuth (assinado no passo 1) não bate mais na verificação do
+// passo 2, e/ou o cookie de sessão (assinado no passo 2) não valida mais na
+// checagem seguinte em /api/auth/me. Na prática: a pessoa autoriza no
+// Discord, volta pro site, e cai de novo na tela de login sem aviso nenhum.
+// Por isso, na Vercel, isso precisa ser um erro alto e claro — não um
+// fallback silencioso — apontando exatamente pra causa.
+const isVercel = Boolean(process.env.VERCEL);
+if (!process.env.JWT_SECRET && isVercel) {
+  throw new Error(
+    "[ZUK SCREEN] JWT_SECRET não está definido nas variáveis de ambiente da Vercel. " +
+      "Sem ele, cada execução serverless usa uma chave diferente e o login com Discord " +
+      "parece 'voltar pra mesma tela' depois de autorizar (o cookie de sessão nunca valida). " +
+      "Vá em Vercel -> seu projeto -> Settings -> Environment Variables e adicione JWT_SECRET " +
+      "(uma string longa e aleatória, ex.: gerada com `openssl rand -hex 32`), depois faça um novo deploy. " +
+      "Aproveite e confira se DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, DISCORD_REDIRECT_URI, " +
+      "DISCORD_BOT_TOKEN, CLIENT_ORIGIN e as chaves da Z.PAY também estão nas Environment Variables da Vercel — " +
+      "o arquivo server/.env fica só na sua máquina (está no .gitignore) e nunca é enviado no deploy."
+  );
+}
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString("hex");
-const IS_PROD = process.env.NODE_ENV === "production";
+const IS_PROD = process.env.NODE_ENV === "production" || isVercel;
 const ALLOWED_ORIGIN = process.env.CLIENT_ORIGIN || "http://localhost:3006";
 
 const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
@@ -698,7 +721,15 @@ if (!process.env.VERCEL) {
   });
 }
 
-// Exporta o app Express pra função serverless em api/index.js poder usá-lo.
-// Continua funcionando normal com "npm start" local, isso aqui não muda nada
-// pra quem roda localmente.
-module.exports = app;
+// Exporta o http.Server (que já tem o Express e o Socket.IO pendurados nele
+// via `new SocketIOServer(server, ...)` lá em cima) — não o "app" sozinho.
+// A Vercel suporta WebSocket nativo em Functions desde jun/2026 (beta
+// pública), e o jeito documentado de usar isso é exatamente exportar o
+// http.Server direto ("export default server"), não `server.listen()` nem
+// só o app do Express. Antes, exportando só `app`, a Vercel não tinha como
+// saber rotear o handshake de WebSocket pro Socket.IO — por isso a conexão
+// em tempo real (salas, tela compartilhada, convites ao vivo) nunca subia
+// em produção, mesmo com o resto do site funcionando normal.
+// Continua funcionando igual com "npm start" local — isso aqui não muda
+// nada pra quem roda na própria máquina.
+module.exports = server;
