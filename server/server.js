@@ -660,6 +660,17 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`ZUK SCREEN rodando em http://localhost:${PORT}`);
-});
+// Em produção na Vercel (serverless) não existe "servidor ligado o tempo
+// todo" — cada requisição sobe uma função isolada, então server.listen()
+// não roda por lá. A própria Vercel já injeta VERCEL=1 automaticamente em
+// toda função, então isso funciona sem você precisar adicionar nada no .env.
+if (!process.env.VERCEL) {
+  server.listen(PORT, () => {
+    console.log(`ZUK SCREEN rodando em http://localhost:${PORT}`);
+  });
+}
+
+// Exporta o app Express pra função serverless em api/index.js poder usá-lo.
+// Continua funcionando normal com "npm start" local, isso aqui não muda nada
+// pra quem roda localmente.
+module.exports = app;
