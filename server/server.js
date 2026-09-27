@@ -57,6 +57,13 @@ if (!zpay.isConfigured()) {
 const app = express();
 const server = http.createServer(app);
 
+// A Vercel roda a função atrás de um proxy e injeta o header X-Forwarded-For
+// com o IP real do usuário. Sem isso aqui, o Express não confia nesse header
+// e o express-rate-limit trava a requisição inteira (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR),
+// derrubando a rota com 500. O "1" diz pra confiar só no primeiro proxy à
+// frente (o da própria Vercel), o que é o correto nesse tipo de deploy.
+app.set("trust proxy", 1);
+
 /* ---------------------------------------------------------------------- */
 /* SEGURANÇA - camadas gerais                                             */
 /* ---------------------------------------------------------------------- */
